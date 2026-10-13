@@ -17,3 +17,12 @@ test('connection page exposes a sign-in action without changing the door layout'
  await page.goto('/connect');await expect(page.getByRole('heading',{name:'Connect Microsoft'})).toBeVisible();await expect(page.getByRole('button',{name:'Connect Microsoft'})).toBeEnabled();
  await page.route('**/api/auth/start',route=>route.fulfill({status:200,contentType:'text/html',body:'<h1>Microsoft sign-in request</h1>'}));await page.getByRole('button',{name:'Connect Microsoft'}).click();await expect(page.getByRole('heading',{name:'Microsoft sign-in request'})).toBeVisible();
 });
+test('production referrer policy preserves the same-origin sign-in POST',async({page})=>{
+ // Use the shipped header policy, rather than Vite's default headers.
+ const {readFileSync}=await import('node:fs');
+ const policy=readFileSync('public/_headers','utf8').match(/Referrer-Policy:\s*(\S+)/)![1];
+ await page.route('https://office.test/connect',route=>route.fulfill({contentType:'text/html',headers:{'Referrer-Policy':policy},body:'<form method="post" action="/api/auth/start"><button>Connect Microsoft</button></form>'}));
+ let origin:string|undefined;
+ await page.route('https://office.test/api/auth/start',route=>{origin=route.request().headers().origin;return route.fulfill({body:'Sign-in started'});});
+ await page.goto('https://office.test/connect');await page.getByRole('button',{name:'Connect Microsoft'}).click();await page.waitForURL('**/api/auth/start');expect(origin).toBe('https://office.test');
+});
