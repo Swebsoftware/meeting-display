@@ -1,6 +1,7 @@
+import { delegatedToken, ReconnectRequired } from './auth';
 import { findIana } from 'windows-iana';
 import { normalize, type CalendarEvent, type Presence } from './normalize';
-export interface Env { DEMO_MODE?:string; DISPLAY_TIME_ZONE?:string; MICROSOFT_TENANT_ID?:string; MICROSOFT_CLIENT_ID?:string; MICROSOFT_CLIENT_SECRET?:string; TARGET_USER_ID?:string; ASSETS:{fetch(request:Request):Promise<Response>} }
+export interface Env { AUTH_MODE?:string; APP_ORIGIN?:string; TOKEN_ENCRYPTION_KEY?:string; CONNECTIONS?:{get(key:string):Promise<string|null>;put(key:string,value:string):Promise<void>}; DEMO_MODE?:string; DISPLAY_TIME_ZONE?:string; MICROSOFT_TENANT_ID?:string; MICROSOFT_CLIENT_ID?:string; MICROSOFT_CLIENT_SECRET?:string; TARGET_USER_ID?:string; ASSETS:{fetch(request:Request):Promise<Response>} }
 let token: {value:string;expires:number;key:string} | undefined;
 let pendingToken: Promise<string> | undefined;
 async function accessToken(env:Env):Promise<string> {
@@ -18,10 +19,11 @@ async function accessToken(env:Env):Promise<string> {
 }
 export async function microsoftStatus(env:Env) {
   for(const name of ['MICROSOFT_TENANT_ID','MICROSOFT_CLIENT_ID','MICROSOFT_CLIENT_SECRET','TARGET_USER_ID'] as const) if(!env[name]) throw new Error(`Missing ${name}`);
-  const bearer=await accessToken(env);
+  const delegated=env.AUTH_MODE==='delegated';
+  const bearer=delegated?await delegatedToken(env):await accessToken(env);
   async function get<T>(path:string):Promise<T> {
-    const response=await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(env.TARGET_USER_ID!)}/${path}`,{headers:{Authorization:`Bearer ${bearer}`,Prefer:'outlook.timezone="UTC"'},signal:AbortSignal.timeout(10_000)});
-    if(!response.ok) {if(response.status===401) token=undefined;throw new Error(`Graph request failed (${response.status})`);}
+    const response=await fetch(`https://graph.microsoft.com/v1.0/${delegated?'me':`users/${encodeURIComponent(env.TARGET_USER_ID!)}`}/${path}`,{headers:{Authorization:`Bearer ${bearer}`,Prefer:'outlook.timezone="UTC"'},signal:AbortSignal.timeout(10_000)});
+    if(!response.ok) {if(response.status===401) {token=undefined;if(delegated)throw new ReconnectRequired();}throw new Error(`Graph request failed (${response.status})`);}
     return await response.json() as T;
   }
   const now=Date.now();

@@ -19,36 +19,65 @@ Open the Vite address shown in its output. The frontend proxies `/api` to Wrangl
 
 `npm run build` checks frontend and Worker TypeScript and builds production assets. `npm test` runs normalization, API, freshness, and daylight-saving tests. `npx playwright install chromium` installs the test browser; `npx playwright test` runs tablet layout and polling/error browser tests against the two development servers (start both first). `npm run preview` previews built frontend assets only; keep the Worker running and use Wrangler on port 8787 for a full production smoke test.
 
-## Microsoft Entra setup — manual steps
+## Connect Microsoft — recommended setup
 
-1. In Microsoft Entra admin center, select your Microsoft 365 tenant and **App registrations → New registration**. Register a single-tenant application named Office Display. Client credentials is a server-to-server flow; **no redirect URL or interactive sign-in is required**.
-2. Record the Directory (tenant) ID and Application (client) ID.
-3. Under **API permissions → Add a permission → Microsoft Graph → Application permissions**, add `Presence.Read.All`, `Calendars.ReadBasic.All`, and `MailboxSettings.Read`. Grant tenant administrator consent for all three. Presence requires a Teams-enabled target user; calendar/mailbox calls require an Exchange Online mailbox. Delegated permissions are not used.
-4. Under **Certificates & secrets**, create a client secret. Store the secret **value**, not its ID, securely. Set a rotation reminder before expiry. For higher-security deployments, replace the credential provider with a certificate-based assertion; v1 uses a server-side client secret.
-5. Set `TARGET_USER_ID` to the target user's object ID or user principal name. No `User.Read.All` permission is needed because the app never searches the directory.
-6. For local live testing, set `DEMO_MODE=false` and fill the four Microsoft variables in the ignored `.dev.vars` file. Never commit it or put secrets into `VITE_*` variables.
-7. For Cloudflare, follow the deployment steps below. Verify `/api/status` and the tablet with a real meeting, away status, and DND.
+The `/connect` page signs the configured office user into Microsoft using a tenant-specific authorization-code flow with PKCE. No tokens reach frontend JavaScript. The door sign keeps its minimal layout; connection settings live on a separate page.
 
-Application permissions can grant broad tenant access. Ask your Exchange administrator to scope calendar/mailbox access to the target mailbox using supported Exchange application access controls / Application RBAC. Teams presence authorization is separate. Confirm effective permissions with your tenant administrator.
+### Microsoft Entra manual steps
 
-Official references: [Get presence](https://learn.microsoft.com/en-us/graph/api/presence-get), [Calendar view](https://learn.microsoft.com/en-us/graph/api/user-list-calendarview), [Mailbox settings](https://learn.microsoft.com/en-us/graph/api/user-get-mailboxsettings), [Client credentials](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow). Live Microsoft integration requires tenant credentials and was not validated using this repository's demo checks.
+1. Register a **single-tenant** app, or reuse your Office Display registration.
+2. Under **Authentication**, add a **Web** redirect URI exactly matching `https://meeting-display.falling-sea-3e49.workers.dev/api/auth/callback`. Do not select SPA, implicit grant, or public-client flows. For a different deployment hostname, update both this URI and `APP_ORIGIN`.
+3. Under **API permissions → Microsoft Graph → Delegated permissions**, add `User.Read`, `Presence.Read`, `Calendars.ReadBasic`, `MailboxSettings.Read`, and `offline_access`. Application permissions are not required for this flow; remove unused application permissions after confirming no other system depends on them. Your organization's consent policies may require **Grant admin consent**. The target user needs Teams and an Exchange Online mailbox.
+4. Under **Certificates & secrets**, create a client secret. Securely save the **Value**, not the secret ID, in Cloudflare → Workers & Pages → meeting-display → Settings → Variables and Secrets as `MICROSOFT_CLIENT_SECRET`. Never paste it into chat, commit it, or use a `VITE_*` variable. Set a secret rotation reminder.
+5. Open `/connect` on the deployed hostname and click **Connect Microsoft**. Sign in as the configured `TARGET_USER_ID` (this deployment: `sam@ontrackteam.co`) and authorize the requested access. Other accounts are rejected before any token storage is changed. `TARGET_USER_ID` supports an object ID, UPN, or mailbox email; object ID is the most stable identifier.
+6. Confirm connection success, then set `DEMO_MODE=false` and remove `DISPLAY_TIME_ZONE` to use Outlook's timezone. Redeploy. Test Available, Busy, DND, a real calendar meeting, and token renewal. Tenant-specific live validation requires the user's sign-in and consent.
 
-## Cloudflare deployment
+### Backend configuration
+
+| Setting | Purpose |
+| --- | --- |
+| `AUTH_MODE=delegated` | Microsoft user sign-in (recommended) |
+| `MICROSOFT_TENANT_ID` | Entra directory ID, non-secret |
+| `MICROSOFT_CLIENT_ID` | Entra application ID, non-secret |
+| `MICROSOFT_CLIENT_SECRET` | Worker secret for confidential-client token exchange |
+| `TARGET_USER_ID` | Allowed account ID / email, non-secret |
+| `APP_ORIGIN` | Fixed HTTPS app origin; callback is `/api/auth/callback` |
+| `TOKEN_ENCRYPTION_KEY` | Worker secret: base64url-encoded random 32-byte AES key |
+| `CONNECTIONS` | Cloudflare KV binding for encrypted tokens |
+| `DEMO_MODE` | `true` keeps demo visible; `false` enables live Graph status |
+| `DISPLAY_TIME_ZONE` | Optional IANA override; omit to respect mailbox timezone |
+
+Cloudflare KV is needed only to retain the delegated connection across Worker restarts. Access and refresh tokens are encrypted with AES-256-GCM and a random IV before storage. OAuth flow data uses an encrypted 10-minute HttpOnly, Secure, SameSite=Lax `__Host-` cookie; state, PKCE, same-origin POST initiation, a fixed callback, tenant-specific endpoints, and explicit account verification protect the connection. The callback fetches only account identity and stores no meeting content. Auth routes are no-store and omit raw Microsoft errors.
+
+The backend refreshes tokens automatically with a one-minute expiry margin, retaining rotated refresh tokens. Revoked authorization / interaction-required responses prompt reconnection. Reconnect at `/connect` after a password/consent policy change. KV may take up to 60 seconds to propagate a newly connected account. Refreshes are deduplicated per isolate; KV is not a distributed lock. Microsoft refresh tokens remain usable across concurrent refreshes. For a multi-user / high-volume deployment, use a per-account Durable Object to serialize refreshes.
+
+**Do not rotate the encryption key without migrating tokens**: existing ciphertext cannot be decrypted with a new key, so the account must reconnect. The generated key is stored only as a Cloudflare secret. No browser session is required on the tablet after the account is connected. Availability is visible publicly unless Cloudflare Access protects the hostname.
+
+### Cloudflare deployment
 
 ```sh
 npx wrangler login
-npx wrangler secret put MICROSOFT_TENANT_ID
-npx wrangler secret put MICROSOFT_CLIENT_ID
+# For a fresh deployment: create KV and insert its ID into wrangler.jsonc.
+npx wrangler kv namespace create CONNECTIONS
 npx wrangler secret put MICROSOFT_CLIENT_SECRET
-npx wrangler secret put TARGET_USER_ID
+# Generate a random 32-byte base64url key securely; save it as:
+npx wrangler secret put TOKEN_ENCRYPTION_KEY
 npm run deploy
 ```
 
-Before the final command, change `DEMO_MODE` to `"false"` in `wrangler.jsonc`. Remove `DISPLAY_TIME_ZONE` from the Worker vars to use the user's Outlook mailbox timezone, or explicitly set an IANA override such as `America/New_York`. The example override is for demo use. Windows mailbox timezone names are converted to IANA via `windows-iana`. Calendar responses request UTC from Graph and are converted only when displayed. Date, clock, and meeting end time use the same zone.
+The existing deployment already has the KV binding and encryption secret; do not recreate them. Configure public IDs and app origin under `vars` in `wrangler.jsonc`. Local development uses `.dev.vars`, Wrangler's local KV, and a separate test app / HTTPS tunnel with a registered callback for live OAuth; local demo works without credentials. `APP_ORIGIN` must be HTTPS because OAuth cookies are Secure. Do not use production KV with local development.
 
-Workers Assets serves `dist`; the Worker handles `/api/*`. The response includes status, displayStatus, message, busyUntil (nullable ISO UTC), updatedAt, timeZone, and demo. Graph tokens are kept only in Worker memory until expiry, with a one-minute renewal margin. Status is cached per isolate for 20 seconds and concurrent requests share a pending request. No access tokens, event titles, attendees, descriptions, or raw Graph errors reach the frontend. Network destinations: `login.microsoftonline.com` and `graph.microsoft.com`.
+Place the entire hostname behind **Cloudflare Access** if status is private. Protect both HTML and API and authenticate the tablet using an Access browser session; do not embed service tokens in the PWA. All Microsoft authentication/API requests originate on the Worker (`login.microsoftonline.com`, `graph.microsoft.com`). Cloudflare runtime egress is independent of development workspace networking.
 
-Place the deployment behind **Cloudflare Access** with a policy permitting the tablet / approved users if availability information is private. Authenticate the tablet using the supported Access browser session and configure session duration appropriately. Do not embed an Access service token in the PWA. Protecting only the HTML leaves the API public: protect the entire hostname. No login UI is built into this single-office application. Restrict CORS to same origin (no cross-origin headers are emitted). Secret rotation uses the same `wrangler secret put` command and redeploy as needed.
+### Alternative: application credentials
+
+`AUTH_MODE=application` retains the original unattended client-credentials flow. It requires **application** permissions `Presence.Read.All`, `Calendars.ReadBasic.All`, and `MailboxSettings.Read`, all with administrator consent. Configure the same tenant/client/secret/target fields as Worker secrets or vars. No callback, KV, encryption key, or Microsoft user sign-in is used. Ask your Exchange administrator to scope mailbox access using supported application access controls / Application RBAC. Teams authorization is separate. Do not combine both modes' permission grants unnecessarily.
+
+### Timezones and privacy
+
+Windows Outlook timezone names are converted to IANA via `windows-iana`. Calendar responses request UTC; dates, clock, and busy-until values render in the mailbox timezone unless explicitly overridden. The API returns normalized status, displayStatus, message, busyUntil, updatedAt, timeZone, and demo. It never returns tokens, meeting titles, descriptions, attendees, or raw Graph errors.
+
+Official references: [Presence](https://learn.microsoft.com/en-us/graph/api/presence-get), [Calendar view](https://learn.microsoft.com/en-us/graph/api/user-list-calendarview), [Mailbox settings](https://learn.microsoft.com/en-us/graph/api/user-get-mailboxsettings), [Authorization-code flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow).
 
 ## Status rules
 
@@ -80,6 +109,8 @@ The service worker caches previously loaded UI assets for basic offline use but 
 - `src/status.ts` — normalized contract, labels, formatting and validation.
 - `src/style.css` — responsive sign design, Tailwind entry point.
 - `worker/index.ts` — API routing, demo responses, cache and safe errors.
+- `worker/auth.ts` — OAuth, target-account verification, encrypted storage, token refresh.
+- `src/Connect.tsx` — separate Microsoft connection page.
 - `worker/graph.ts` — private authentication, Graph queries, timezone resolution.
 - `worker/normalize.ts` — presence/calendar priority logic.
 - `public/` — PWA manifest, icon and offline service worker.

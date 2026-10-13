@@ -2,6 +2,27 @@
   "name": "meeting-display",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-01",
-  "assets": { "directory": "./dist", "binding": "ASSETS", "not_found_handling": "single-page-application", "run_worker_first": ["/api/*"] },
-  "vars": { "DEMO_MODE": "true", "DISPLAY_TIME_ZONE": "America/New_York" }
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "vars": {
+    "DEMO_MODE": "true",
+    "DISPLAY_TIME_ZONE": "America/New_York",
+    "AUTH_MODE": "delegated",
+    "APP_ORIGIN": "https://meeting-display.falling-sea-3e49.workers.dev",
+    "MICROSOFT_CLIENT_ID": "091bf7d5-34be-444a-9a7a-1e0bace1c65e",
+    "MICROSOFT_TENANT_ID": "40fe2bd1-2066-4481-a4ff-a5656869c9e7",
+    "TARGET_USER_ID": "sam@ontrackteam.co"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CONNECTIONS",
+      "id": "a8a0eafd0e814a688771232a50505516"
+    }
+  ]
 }

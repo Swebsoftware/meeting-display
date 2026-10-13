@@ -1,9 +1,11 @@
+import { authRoute, ReconnectRequired } from './auth';
 import { microsoftStatus, type Env } from './graph';
 import { labels, states, type StatusResponse } from '../src/status';
 let cached: {data:StatusResponse;expires:number} | undefined;
 let pending: Promise<StatusResponse> | undefined;
 export default { async fetch(request:Request,env:Env):Promise<Response> {
   const url=new URL(request.url);
+  if(url.pathname.startsWith('/api/auth/')) return authRoute(request,env);
   if(!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
   const headers={'Cache-Control':'no-store','Content-Type':'application/json','X-Content-Type-Options':'nosniff'};
   if(url.pathname!=='/api/status') return Response.json({error:'Not found'},{status:404,headers});
@@ -23,6 +25,6 @@ export default { async fetch(request:Request,env:Env):Promise<Response> {
   } catch(error) {
     // Never log raw Graph responses or credentials.
     console.error(error instanceof Error?error.message:'Status service failed');
-    return Response.json({error:'Status temporarily unavailable'},{status:503,headers:{...headers,'Retry-After':'25'}});
+    return Response.json({error:'Status temporarily unavailable',reconnectRequired:error instanceof ReconnectRequired},{status:503,headers:{...headers,'Retry-After':'25'}});
   }
 }};
