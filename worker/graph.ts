@@ -17,10 +17,11 @@ async function accessToken(env:Env):Promise<string> {
   })();
   try { return await pendingToken; } finally { pendingToken=undefined; }
 }
-export async function microsoftStatus(env:Env) {
-  for(const name of ['MICROSOFT_TENANT_ID','MICROSOFT_CLIENT_ID','MICROSOFT_CLIENT_SECRET','TARGET_USER_ID'] as const) if(!env[name]) throw new Error(`Missing ${name}`);
+export async function microsoftStatus(env:Env, displayId?:string) {
+  for(const name of ['MICROSOFT_TENANT_ID','MICROSOFT_CLIENT_ID','MICROSOFT_CLIENT_SECRET'] as const) if(!env[name]) throw new Error(`Missing ${name}`);
   const delegated=env.AUTH_MODE==='delegated';
-  const bearer=delegated?await delegatedToken(env):await accessToken(env);
+  if(!delegated && !env.TARGET_USER_ID) throw new Error('Missing TARGET_USER_ID');
+  const bearer=delegated?await delegatedToken(env,displayId):await accessToken(env);
   async function get<T>(path:string):Promise<T> {
     const response=await fetch(`https://graph.microsoft.com/v1.0/${delegated?'me':`users/${encodeURIComponent(env.TARGET_USER_ID!)}`}/${path}`,{headers:{Authorization:`Bearer ${bearer}`,Prefer:'outlook.timezone="UTC"'},signal:AbortSignal.timeout(10_000)});
     if(!response.ok) {if(response.status===401) {token=undefined;if(delegated)throw new ReconnectRequired();}throw new Error(`Graph request failed (${response.status})`);}

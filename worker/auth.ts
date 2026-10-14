@@ -3,8 +3,13 @@ import type { Env } from './graph';
 const SCOPES = 'https://graph.microsoft.com/User.Read https://graph.microsoft.com/Presence.Read https://graph.microsoft.com/Calendars.ReadBasic https://graph.microsoft.com/MailboxSettings.Read offline_access';
 const TOKEN_KEY = 'microsoft-connection-v1';
 const COOKIE = '__Host-office-oauth';
+const SESSION_COOKIE = '__Host-office-session';
+const LEGACY_DISPLAY = 'legacy-display-v1';
+export const validDisplayId = (value:string) => /^[A-Za-z0-9_-]{43}$/.test(value);
+const connectionKey = (displayId?:string) => displayId ? `connection:${displayId}` : TOKEN_KEY;
+interface Session { purpose:'office-session'; displayId:string; userId:string; expiresAt:number }
 export class ReconnectRequired extends Error { constructor() { super('Microsoft connection requires sign-in'); } }
-interface Tokens { accessToken: string; refreshToken: string; expiresAt: number; userId: string; target: string; clientId: string; tenantId: string }
+export interface Tokens { accessToken: string; refreshToken: string; expiresAt: number; userId: string; target: string; clientId: string; tenantId: string }
 interface Flow { state: string; verifier: string; expiresAt: number }
 function encode(bytes: Uint8Array) { return btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function decode(value: string) { return Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')), c=>c.charCodeAt(0)); }
@@ -26,7 +31,7 @@ export async function decrypt<T>(value: string, env: Env): Promise<T> {
   return JSON.parse(new TextDecoder().decode(plaintext)) as T;
 }
 function config(env:Env) {
-  if(!env.MICROSOFT_TENANT_ID || !env.MICROSOFT_CLIENT_ID || !env.MICROSOFT_CLIENT_SECRET || !env.TARGET_USER_ID || !env.TOKEN_ENCRYPTION_KEY || !env.CONNECTIONS || !env.APP_ORIGIN) throw new Error('Microsoft sign-in is not configured');
+  if(!env.MICROSOFT_TENANT_ID || !env.MICROSOFT_CLIENT_ID || !env.MICROSOFT_CLIENT_SECRET || !env.TOKEN_ENCRYPTION_KEY || !env.CONNECTIONS || !env.APP_ORIGIN) throw new Error('Microsoft sign-in is not configured');
   const origin=new URL(env.APP_ORIGIN);
   if(origin.protocol!=='https:' || origin.origin!==env.APP_ORIGIN) throw new Error('APP_ORIGIN must be an HTTPS origin');
   return `${env.APP_ORIGIN}/api/auth/callback`;
@@ -42,22 +47,33 @@ async function exchange(env:Env, fields:Record<string,string>) {
   if(!data.access_token || !Number.isFinite(data.expires_in)) throw new Error('Invalid Microsoft token response');
   return data;
 }
-let refreshing: Promise<Tokens> | undefined;
-export async function delegatedToken(env:Env):Promise<string> {
+const refreshing = new Map<string,Promise<Tokens>>();
+export async function legacyDisplayId(env:Env) { return await env.CONNECTIONS?.get(LEGACY_DISPLAY) || undefined; }
+export async function delegatedToken(env:Env, displayId?:string):Promise<string> {
   config(env);
-  const stored=await env.CONNECTIONS!.get(TOKEN_KEY);
+  if(displayId && !validDisplayId(displayId)) throw new ReconnectRequired();
+  const storageKey=connectionKey(displayId);
+  const stored=await env.CONNECTIONS!.get(storageKey);
   if(!stored) throw new ReconnectRequired();
   const tokens=await decrypt<Tokens>(stored,env);
-  if(tokens.target!==env.TARGET_USER_ID!.toLowerCase() || tokens.clientId!==env.MICROSOFT_CLIENT_ID || tokens.tenantId!==env.MICROSOFT_TENANT_ID) throw new ReconnectRequired();
+  if(tokens.clientId!==env.MICROSOFT_CLIENT_ID || tokens.tenantId!==env.MICROSOFT_TENANT_ID || (!displayId && tokens.target!==env.TARGET_USER_ID?.toLowerCase())) throw new ReconnectRequired();
   if(tokens.expiresAt>Date.now()+60000) return tokens.accessToken;
-  // Deduplicate refreshes within each Worker isolate. Microsoft permits old refresh
-  // tokens to remain valid; this single-account KV implementation is not a distributed lock.
-  refreshing ??= (async()=>{
-    const data=await exchange(env,{grant_type:'refresh_token',refresh_token:tokens.refreshToken});
-    const next={...tokens,accessToken:data.access_token,refreshToken:data.refresh_token || tokens.refreshToken,expiresAt:Date.now()+data.expires_in*1000};
-    await env.CONNECTIONS!.put(TOKEN_KEY,await encrypt(next,env));return next;
-  })();
-  try { return (await refreshing).accessToken; } finally { refreshing=undefined; }
+  const refreshKey=`${env.MICROSOFT_TENANT_ID}:${env.MICROSOFT_CLIENT_ID}:${storageKey}`;
+  let pending=refreshing.get(refreshKey);
+  if(!pending) {
+    pending=(async()=>{
+      const data=await exchange(env,{grant_type:'refresh_token',refresh_token:tokens.refreshToken});
+      const next={...tokens,accessToken:data.access_token,refreshToken:data.refresh_token || tokens.refreshToken,expiresAt:Date.now()+data.expires_in*1000};
+      await env.CONNECTIONS!.put(storageKey,await encrypt(next,env));return next;
+    })();
+    refreshing.set(refreshKey,pending);
+  }
+  try { return (await pending).accessToken; } finally { if(refreshing.get(refreshKey)===pending)refreshing.delete(refreshKey); }
+}
+async function session(request:Request,env:Env):Promise<Session|null> {
+  const cookie=request.headers.get('Cookie')?.split(';').map(c=>c.trim()).find(c=>c.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length+1);
+  if(!cookie) return null;
+  try { const value=await decrypt<Session>(cookie,env);return value.purpose==='office-session' && validDisplayId(value.displayId) && value.userId && value.expiresAt>Date.now() ? value : null; } catch { return null; }
 }
 const security={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"};
 function page(message:string,status:number) {
@@ -67,13 +83,19 @@ export async function authRoute(request:Request,env:Env):Promise<Response> {
   const url=new URL(request.url);
   if(url.pathname==='/api/auth/connection') {
     if(request.method!=='GET') return new Response('Method not allowed',{status:405,headers:security});
+    const owner=await session(request,env);
     let connected=false;
-    try {const stored=await env.CONNECTIONS?.get(TOKEN_KEY);if(stored){const data=await decrypt<Tokens>(stored,env);connected=data.target===env.TARGET_USER_ID?.toLowerCase() && data.clientId===env.MICROSOFT_CLIENT_ID && data.tenantId===env.MICROSOFT_TENANT_ID;}}catch{ /* Report safe connection state only. */ }
-    return Response.json({connected,configured:!!(env.MICROSOFT_CLIENT_SECRET && env.TOKEN_ENCRYPTION_KEY && env.TARGET_USER_ID && env.CONNECTIONS),demo:env.DEMO_MODE==='true'},{headers:security});
+    try {const stored=owner && await env.CONNECTIONS?.get(connectionKey(owner.displayId));if(stored){const data=await decrypt<Tokens>(stored,env);connected=data.userId===owner!.userId && data.clientId===env.MICROSOFT_CLIENT_ID && data.tenantId===env.MICROSOFT_TENANT_ID;}}catch{ /* Safe connection state only. */ }
+    let configured=false;try{config(env);configured=true;}catch{ /* Do not disclose configuration. */ }
+    return Response.json({connected,configured,demo:env.DEMO_MODE==='true',displayPath:connected?`/display/${owner!.displayId}`:null},{headers:security});
   }
   try {
     const redirectUri=config(env);
     if(url.origin!==env.APP_ORIGIN) return page('Open connection settings on the configured application hostname.',400);
+    if(url.pathname==='/api/auth/logout') {
+      if(request.method!=='POST' || request.headers.get('Origin')!==env.APP_ORIGIN) return page('Invalid sign-out request.',403);
+      return new Response(null,{status:303,headers:{...security,Location:'/connect','Set-Cookie':`${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`}});
+    }
     if(url.pathname==='/api/auth/start') {
       if(request.method!=='POST') return new Response('Method not allowed',{status:405,headers:{...security,Allow:'POST'}});
       if(request.headers.get('Origin')!==env.APP_ORIGIN) return page('Invalid connection request. Please try again from the connection page.',403);
@@ -95,11 +117,20 @@ export async function authRoute(request:Request,env:Env):Promise<Response> {
       const response=await fetch('https://graph.microsoft.com/v1.0/me?$select=id,userPrincipalName,mail',{headers:{Authorization:`Bearer ${data.access_token}`},signal:AbortSignal.timeout(10000)});
       if(!response.ok) throw new Error(`Microsoft profile request failed (${response.status})`);
       const user=await response.json() as {id:string;userPrincipalName:string;mail?:string};
-      const target=env.TARGET_USER_ID!.toLowerCase();
-      if(![user.id,user.userPrincipalName,user.mail].some(value=>value?.toLowerCase()===target)) return page('This account is not the configured office user. Sign in with the correct Microsoft 365 account.',403);
-      const tokens:Tokens={accessToken:data.access_token,refreshToken:data.refresh_token,expiresAt:Date.now()+data.expires_in*1000,userId:user.id,target,clientId:env.MICROSOFT_CLIENT_ID!,tenantId:env.MICROSOFT_TENANT_ID!};
-      await env.CONNECTIONS!.put(TOKEN_KEY,await encrypt(tokens,env));
-      return new Response(null,{status:303,headers:{...security,Location:'/connect?connected=1','Set-Cookie':`${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`}});
+      if(!user.id || !user.userPrincipalName) throw new Error('Microsoft profile is incomplete');
+      const accountKey=`account:${env.MICROSOFT_TENANT_ID}:${user.id}`;
+      const existing=await env.CONNECTIONS!.get(accountKey);
+      const displayId=existing && validDisplayId(existing)?existing:random();
+      const tokens:Tokens={accessToken:data.access_token,refreshToken:data.refresh_token,expiresAt:Date.now()+data.expires_in*1000,userId:user.id,target:user.userPrincipalName.toLowerCase(),clientId:env.MICROSOFT_CLIENT_ID!,tenantId:env.MICROSOFT_TENANT_ID!};
+      await env.CONNECTIONS!.put(connectionKey(displayId),await encrypt(tokens,env));
+      if(!existing)await env.CONNECTIONS!.put(accountKey,displayId);
+      // Additional accounts never replace the original single-user display.
+      if(env.TARGET_USER_ID && [user.id,user.userPrincipalName,user.mail].some(value=>value?.toLowerCase()===env.TARGET_USER_ID!.toLowerCase())) await env.CONNECTIONS!.put(LEGACY_DISPLAY,displayId);
+      const owner:Session={purpose:'office-session',displayId,userId:user.id,expiresAt:Date.now()+30*86400000};
+      const headers=new Headers({...security,Location:'/connect?connected=1'});
+      headers.append('Set-Cookie',`${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+      headers.append('Set-Cookie',`${SESSION_COOKIE}=${await encrypt(owner,env)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`);
+      return new Response(null,{status:303,headers});
     }
     return new Response('Not found',{status:404,headers:security});
   }catch{

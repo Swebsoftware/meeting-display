@@ -4,6 +4,7 @@ import {createRoot} from 'react-dom/client';
 import {formatTime,parseStatus,retainStatus,states,type StatusResponse} from './status';
 import './style.css';
 function App(){
+  const displayId=location.pathname.startsWith('/display/')?location.pathname.slice('/display/'.length):null;
   const [data,setData]=useState<StatusResponse|null>(null);
   const [connected,setConnected]=useState(true);
   const [reconnect,setReconnect]=useState(false);
@@ -13,13 +14,13 @@ function App(){
   const [awake,setAwake]=useState(false);
   useEffect(()=>{let dead=false;let controller:AbortController|undefined;
     async function poll(){controller=new AbortController();const timeout=setTimeout(()=>controller?.abort(),12000);
-      try{const response=await fetch(`/api/status?state=${encodeURIComponent(demoState)}`,{cache:'no-store',signal:controller.signal});if(!response.ok){const failure=await response.json().catch(()=>({}));if(!dead)setReconnect(failure.reconnectRequired===true);throw new Error('API unavailable');}const next=parseStatus(await response.json());if(!dead){last.current=next;setData(next);setConnected(true);setReconnect(false);}}
+      try{const response=await fetch(`/api/status?state=${encodeURIComponent(demoState)}${displayId?`&display=${encodeURIComponent(displayId)}`:''}`,{cache:'no-store',signal:controller.signal});if(!response.ok){const failure=await response.json().catch(()=>({}));if(!dead)setReconnect(failure.reconnectRequired===true);throw new Error('API unavailable');}const next=parseStatus(await response.json());if(!dead){last.current=next;setData(next);setConnected(true);setReconnect(false);}}
       catch{if(!dead){setData(retainStatus(last.current));setConnected(false);}}finally{clearTimeout(timeout);}}
     void poll();const timer=setInterval(()=>void poll(),25000);
     const expire=setInterval(()=>{if(last.current && Date.now()-Date.parse(last.current.updatedAt)>=120000){setData(retainStatus(null));setConnected(false);}},1000);
     const resume=()=>{if(document.visibilityState==='visible')void poll();};document.addEventListener('visibilitychange',resume);
     return()=>{dead=true;controller?.abort();clearInterval(timer);clearInterval(expire);document.removeEventListener('visibilitychange',resume);};
-  },[demoState]);
+  },[demoState,displayId]);
   useEffect(()=>{const timer=setInterval(()=>setClock(new Date()),1000);return()=>clearInterval(timer);},[]);
   useEffect(()=>{let lock:WakeLockSentinel|undefined;let disposed=false;
     const acquire=async()=>{try{if(document.visibilityState==='visible' && 'wakeLock' in navigator){const next=await navigator.wakeLock.request('screen');if(disposed){await next.release();return;}lock=next;setAwake(true);next.addEventListener('release',()=>setAwake(false));}}catch{setAwake(false);}};
@@ -35,6 +36,10 @@ function App(){
     {data?.demo && <nav className="demo" aria-label="Demo states"><span>DEMO</span>{states.map(s=><button key={s} aria-pressed={demoState===s} onClick={()=>setDemoState(s)}>{s==='in_meeting'?'Meeting':s==='do_not_disturb'?'Do not disturb':s.charAt(0).toUpperCase()+s.slice(1)}</button>)}</nav>}
     <span className="sr-only">{awake?'Screen wake lock active':'Use tablet kiosk settings to keep the screen awake.'}</span>
   </main>;
+}
+if(location.pathname.startsWith('/display/')) {
+  const id=location.pathname.slice('/display/'.length);
+  document.querySelector('link[rel="manifest"]')?.setAttribute('href',`/api/manifest?display=${encodeURIComponent(id)}`);
 }
 createRoot(document.getElementById('root')!).render(<React.StrictMode>{location.pathname==='/connect'?<Connect/>:<App/>}</React.StrictMode>);
 if('serviceWorker' in navigator && import.meta.env.PROD) window.addEventListener('load',()=>{void navigator.serviceWorker.register('/sw.js').catch(()=>{});});

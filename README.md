@@ -1,6 +1,6 @@
 # Office availability display
 
-A full-screen React/TypeScript PWA for a tablet outside an office. Cloudflare Workers hosts the static Vite/Tailwind UI and a same-origin Microsoft Graph API. No database is required. Demo mode is enabled by default; **turn it off before production**.
+A full-screen React/TypeScript PWA for a tablet outside an office. Cloudflare Workers hosts the static Vite/Tailwind UI and a same-origin Microsoft Graph API. No database is required. The deployed app uses live Microsoft status. Use `DEMO_MODE=true` in `.dev.vars` for local demo development.
 
 ## Local development
 
@@ -21,15 +21,15 @@ Open the Vite address shown in its output. The frontend proxies `/api` to Wrangl
 
 ## Connect Microsoft — recommended setup
 
-The `/connect` page signs the configured office user into Microsoft using a tenant-specific authorization-code flow with PKCE. No tokens reach frontend JavaScript. The door sign keeps its minimal layout; connection settings live on a separate page.
+The `/connect` page signs the configured office user into Microsoft using a tenant-specific authorization-code flow with PKCE. No tokens reach frontend JavaScript. Each person receives a distinct display link; one user signing in never replaces another user’s connection. The door sign keeps its minimal layout; connection settings live on a separate page.
 
 ### Microsoft Entra manual steps
 
 1. Register a **single-tenant** app, or reuse your Office Display registration.
 2. Under **Authentication**, add a **Web** redirect URI exactly matching `https://meeting-display.falling-sea-3e49.workers.dev/api/auth/callback`. Do not select SPA, implicit grant, or public-client flows. For a different deployment hostname, update both this URI and `APP_ORIGIN`.
-3. Under **API permissions → Microsoft Graph → Delegated permissions**, add `User.Read`, `Presence.Read`, `Calendars.ReadBasic`, `MailboxSettings.Read`, and `offline_access`. Application permissions are not required for this flow; remove unused application permissions after confirming no other system depends on them. Your organization's consent policies may require **Grant admin consent**. The target user needs Teams and an Exchange Online mailbox.
+3. Under **API permissions → Microsoft Graph → Delegated permissions**, add `User.Read`, `Presence.Read`, `Calendars.ReadBasic`, `MailboxSettings.Read`, and `offline_access`. To avoid individual admin-approval requests, an authorized administrator can grant tenant-wide consent once for these delegated permissions. The organization’s user-consent, assignment, Conditional Access, and MFA policies still apply; the application cannot bypass them. Application permissions are not required for this flow; remove unused application permissions after confirming no other system depends on them. Your organization's consent policies may require **Grant admin consent**. The target user needs Teams and an Exchange Online mailbox.
 4. Under **Certificates & secrets**, create a client secret. Securely save the **Value**, not the secret ID, in Cloudflare → Workers & Pages → meeting-display → Settings → Variables and Secrets as `MICROSOFT_CLIENT_SECRET`. Never paste it into chat, commit it, or use a `VITE_*` variable. Set a secret rotation reminder.
-5. Open `/connect` on the deployed hostname and click **Connect Microsoft**. Sign in as the configured `TARGET_USER_ID` (this deployment: `sam@ontrackteam.co`) and authorize the requested access. Other accounts are rejected before any token storage is changed. `TARGET_USER_ID` supports an object ID, UPN, or mailbox email; object ID is the most stable identifier.
+5. Open `/connect` on the deployed hostname and click **Connect Microsoft**. Sign in with your own Microsoft 365 work account in this organization. Each account gets a private settings session and a unique `/display/<random-id>` link. Copy that link to its tablet. Reconnecting the same account retains its link. Accounts from other organizations cannot use this single-tenant Entra registration. `TARGET_USER_ID` only preserves the original single-user URL; it does not restrict new sign-ups.
 6. Confirm connection success, then set `DEMO_MODE=false` and remove `DISPLAY_TIME_ZONE` to use Outlook's timezone. Redeploy. Test Available, Busy, DND, a real calendar meeting, and token renewal. Tenant-specific live validation requires the user's sign-in and consent.
 
 ### Backend configuration
@@ -40,18 +40,18 @@ The `/connect` page signs the configured office user into Microsoft using a tena
 | `MICROSOFT_TENANT_ID` | Entra directory ID, non-secret |
 | `MICROSOFT_CLIENT_ID` | Entra application ID, non-secret |
 | `MICROSOFT_CLIENT_SECRET` | Worker secret for confidential-client token exchange |
-| `TARGET_USER_ID` | Allowed account ID / email, non-secret |
+| `TARGET_USER_ID` | Original account ID / email for the legacy root display only |
 | `APP_ORIGIN` | Fixed HTTPS app origin; callback is `/api/auth/callback` |
 | `TOKEN_ENCRYPTION_KEY` | Worker secret: base64url-encoded random 32-byte AES key |
 | `CONNECTIONS` | Cloudflare KV binding for encrypted tokens |
 | `DEMO_MODE` | `true` keeps demo visible; `false` enables live Graph status |
 | `DISPLAY_TIME_ZONE` | Optional IANA override; omit to respect mailbox timezone |
 
-Cloudflare KV is needed only to retain the delegated connection across Worker restarts. Access and refresh tokens are encrypted with AES-256-GCM and a random IV before storage. OAuth flow data uses an encrypted 10-minute HttpOnly, Secure, SameSite=Lax `__Host-` cookie; state, PKCE, same-origin POST initiation, a fixed callback, tenant-specific endpoints, and explicit account verification protect the connection. The callback fetches only account identity and stores no meeting content. Auth routes are no-store and omit raw Microsoft errors.
+Cloudflare KV retains encrypted connections per user and a tenant/user ID index for stable links across Worker restarts. The settings page uses an encrypted 30-day HttpOnly session cookie bound to one connection; no unauthenticated user can retrieve another person’s link through the settings API. Signing out clears only that settings session; the tablet continues to work. Access and refresh tokens are encrypted with AES-256-GCM and a random IV before storage. OAuth flow data uses an encrypted 10-minute HttpOnly, Secure, SameSite=Lax `__Host-` cookie; state, PKCE, same-origin POST initiation, a fixed callback, tenant-specific endpoints, and Graph-confirmed account identity protect the connection. The callback fetches only account identity and stores no meeting content. Auth routes are no-store and omit raw Microsoft errors.
 
-The backend refreshes tokens automatically with a one-minute expiry margin, retaining rotated refresh tokens. Revoked authorization / interaction-required responses prompt reconnection. Reconnect at `/connect` after a password/consent policy change. KV may take up to 60 seconds to propagate a newly connected account. Refreshes are deduplicated per isolate; KV is not a distributed lock. Microsoft refresh tokens remain usable across concurrent refreshes. For a multi-user / high-volume deployment, use a per-account Durable Object to serialize refreshes.
+The backend refreshes tokens automatically with a one-minute expiry margin, retaining rotated refresh tokens. Revoked authorization / interaction-required responses prompt reconnection. Reconnect at `/connect` after a password/consent policy change. KV may take up to 60 seconds to propagate a newly connected account. Refreshes and status caches are keyed separately for every connection. Refreshes are deduplicated per user per isolate; KV is not a distributed lock. Microsoft refresh tokens remain usable across concurrent refreshes. For a high-volume deployment, use a per-account Durable Object to serialize refreshes. Concurrent first-time sign-ins for the same account may observe delayed KV index propagation; retry sign-in from the original browser if the settings page has not appeared yet.
 
-**Do not rotate the encryption key without migrating tokens**: existing ciphertext cannot be decrypted with a new key, so the account must reconnect. The generated key is stored only as a Cloudflare secret. No browser session is required on the tablet after the account is connected. Availability is visible publicly unless Cloudflare Access protects the hostname.
+**Do not rotate the encryption key without migrating tokens**: existing ciphertext cannot be decrypted with a new key, so the account must reconnect. The generated key is stored only as a Cloudflare secret. No browser session is required on the tablet after the account is connected. Each personal link contains a cryptographically random 256-bit capability. Anyone with that link can view normalized availability without signing in. Treat it as private and do not post it publicly. Display responses use no-referrer and noindex headers; the service worker does not store personal URLs or API responses. The legacy root still shows the original office user for backward compatibility. Cloudflare Access can additionally protect the hostname. Changing encryption keys invalidates settings sessions as well as tokens.
 
 ### Cloudflare deployment
 
@@ -108,7 +108,7 @@ The service worker caches previously loaded UI assets for basic offline use but 
 - `src/main.tsx` — tablet UI, polling, freshness, wake lock, fullscreen.
 - `src/status.ts` — normalized contract, labels, formatting and validation.
 - `src/style.css` — responsive sign design, Tailwind entry point.
-- `worker/index.ts` — API routing, demo responses, cache and safe errors.
+- `worker/index.ts` — API routing, demo responses, per-user cache and safe errors.
 - `worker/auth.ts` — OAuth, target-account verification, encrypted storage, token refresh.
 - `src/Connect.tsx` — separate Microsoft connection page.
 - `worker/graph.ts` — private authentication, Graph queries, timezone resolution.
@@ -116,4 +116,12 @@ The service worker caches previously loaded UI assets for basic offline use but 
 - `public/` — PWA manifest, icon and offline service worker.
 - `tests/` — unit/API and browser workflow tests.
 
-The normalized API boundary allows future logos, photos, multiple users and configurable messaging without exposing Graph data to the UI. Meeting titles are intentionally not fetched; an explicit future server-side privacy configuration would be needed before requesting/exposing them.
+The normalized API boundary allows future logos, photos and configurable messaging without exposing Graph data to the UI. Meeting titles are intentionally not fetched; an explicit future server-side privacy configuration would be needed before requesting/exposing them.
+
+## Sharing with coworkers
+
+Send coworkers `https://meeting-display.falling-sea-3e49.workers.dev/connect`. They sign in using their own Microsoft 365 account, then select **Copy link** or **Open my display**. No new app registration, tenant ID entry, client secret entry, or deployment is required per user. A tenant administrator should grant organization-wide consent once if policies otherwise require individual approval requests. The app remains single tenant; supporting other organizations would require an explicitly reviewed multi-tenant registration and tenant validation.
+
+Your original root URL keeps using the existing encrypted connection without migration or sign-in. To retrieve a personal link for the original account, sign in again on `/connect`; it will also keep the legacy root attached to that account. Other people can never replace the legacy root. Recovery uses Microsoft sign-in on `/connect`; do not share an authenticated settings browser session.
+
+Personal displays load a per-link PWA manifest so an installed tablet app opens the correct user’s URL rather than the legacy root. Personal URLs and their manifests are not stored by the service worker. For a separate browser test API, run `npx wrangler dev --port 8788 --var DEMO_MODE:true`, then `TEST_API_ORIGIN=http://127.0.0.1:8788 CHROMIUM_PATH=/usr/bin/chromium npx playwright test` while Vite runs.
