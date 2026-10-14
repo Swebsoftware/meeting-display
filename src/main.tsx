@@ -12,11 +12,11 @@ function App(){
   const [demoState,setDemoState]=useState(new URLSearchParams(location.search).get('state')||'available');
   const last=useRef<StatusResponse|null>(null);
   const [awake,setAwake]=useState(false);
-  useEffect(()=>{let dead=false;let controller:AbortController|undefined;
-    async function poll(){controller=new AbortController();const timeout=setTimeout(()=>controller?.abort(),12000);
+  useEffect(()=>{let dead=false;let inFlight=false;let controller:AbortController|undefined;
+    async function poll(){if(dead || inFlight)return;inFlight=true;controller=new AbortController();const timeout=setTimeout(()=>controller?.abort(),12000);
       try{const response=await fetch(`/api/status?state=${encodeURIComponent(demoState)}${displayId?`&display=${encodeURIComponent(displayId)}`:''}`,{cache:'no-store',signal:controller.signal});if(!response.ok){const failure=await response.json().catch(()=>({}));if(!dead)setReconnect(failure.reconnectRequired===true);throw new Error('API unavailable');}const next=parseStatus(await response.json());if(!dead){last.current=next;setData(next);setConnected(true);setReconnect(false);}}
-      catch{if(!dead){setData(retainStatus(last.current));setConnected(false);}}finally{clearTimeout(timeout);}}
-    void poll();const timer=setInterval(()=>void poll(),25000);
+      catch{if(!dead){setData(retainStatus(last.current));setConnected(false);}}finally{clearTimeout(timeout);inFlight=false;}}
+    void poll();const timer=setInterval(()=>void poll(),10000);
     const expire=setInterval(()=>{if(last.current && Date.now()-Date.parse(last.current.updatedAt)>=120000){setData(retainStatus(null));setConnected(false);}},1000);
     const resume=()=>{if(document.visibilityState==='visible')void poll();};document.addEventListener('visibilitychange',resume);
     return()=>{dead=true;controller?.abort();clearInterval(timer);clearInterval(expire);document.removeEventListener('visibilitychange',resume);};

@@ -31,7 +31,7 @@ export default { async fetch(request:Request,env:Env):Promise<Response> {
       let operation=pending.get(cacheKey);
       if(!operation){operation=microsoftStatus(env,displayId);pending.set(cacheKey,operation);}
       try {
-        cached={data:await operation,expires:Date.now()+20_000};
+        cached={data:await operation,expires:Date.now()+5_000};
         if(cache.size>=256)cache.delete(cache.keys().next().value!);
         cache.set(cacheKey,cached);
       } finally {if(pending.get(cacheKey)===operation)pending.delete(cacheKey);}

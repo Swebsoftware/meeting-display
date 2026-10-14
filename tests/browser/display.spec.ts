@@ -10,9 +10,9 @@ for(const viewport of [{width:1280,height:800},{width:768,height:1024},{width:10
 test('polls and expires the last status on failures',async({page})=>{
  await page.clock.install();await page.goto('/');await expect(page.getByRole('heading',{name:'Available',exact:true})).toBeVisible();
  const failRoute=(route:import('@playwright/test').Route)=>route.fulfill({status:503,json:{error:'unavailable'}});await page.route('**/api/status*',failRoute);
- await page.clock.fastForward(25000);await expect(page.getByText('Reconnecting · status may be out of date')).toBeVisible();await expect(page.getByRole('heading',{name:'Available',exact:true})).toBeVisible();
+ await page.clock.fastForward(10000);await expect(page.getByText('Reconnecting · status may be out of date')).toBeVisible();await expect(page.getByRole('heading',{name:'Available',exact:true})).toBeVisible();
  await page.clock.fastForward(121000);await expect(page.getByRole('heading',{name:'Status unavailable',exact:true})).toBeVisible();
- await page.unroute('**/api/status*',failRoute);await page.route('**/api/status*',async route=>{const requestUrl=new URL(route.request().url());const response=await route.fetch(process.env.TEST_API_ORIGIN?{url:`${process.env.TEST_API_ORIGIN}${requestUrl.pathname}${requestUrl.search}`} : undefined);const data=await response.json();data.updatedAt=await page.evaluate(()=>new Date().toISOString());await route.fulfill({json:data});});await page.clock.fastForward(25000);await expect(page.getByRole('heading',{name:'Available',exact:true})).toBeVisible();
+ await page.unroute('**/api/status*',failRoute);await page.route('**/api/status*',async route=>{const requestUrl=new URL(route.request().url());const response=await route.fetch(process.env.TEST_API_ORIGIN?{url:`${process.env.TEST_API_ORIGIN}${requestUrl.pathname}${requestUrl.search}`} : undefined);const data=await response.json();data.updatedAt=await page.evaluate(()=>new Date().toISOString());await route.fulfill({json:data});});await page.clock.fastForward(10000);await expect(page.getByRole('heading',{name:'Available',exact:true})).toBeVisible();
 });
 test('connection page exposes a sign-in action without changing the door layout',async({page})=>{
  await page.route('**/api/auth/connection',route=>route.fulfill({json:{connected:false,configured:true,demo:true}}));
