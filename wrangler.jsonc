@@ -11,8 +11,7 @@
     ]
   },
   "vars": {
-    "DEMO_MODE": "true",
-    "DISPLAY_TIME_ZONE": "America/New_York",
+    "DEMO_MODE": "false",
     "AUTH_MODE": "delegated",
     "APP_ORIGIN": "https://meeting-display.falling-sea-3e49.workers.dev",
     "MICROSOFT_CLIENT_ID": "091bf7d5-34be-444a-9a7a-1e0bace1c65e",
