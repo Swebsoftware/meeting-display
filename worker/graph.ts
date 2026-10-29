@@ -2,7 +2,7 @@ import { delegatedToken, ReconnectRequired } from './auth';
 import { findIana } from 'windows-iana';
 import { normalize, type CalendarEvent, type Presence } from './normalize';
 export interface Env { AUTH_MODE?:string; APP_ORIGIN?:string; TOKEN_ENCRYPTION_KEY?:string; CONNECTIONS?:{get(key:string):Promise<string|null>;put(key:string,value:string):Promise<void>}; DEMO_MODE?:string; DISPLAY_TIME_ZONE?:string; MICROSOFT_TENANT_ID?:string; MICROSOFT_CLIENT_ID?:string; MICROSOFT_CLIENT_SECRET?:string; TARGET_USER_ID?:string; ASSETS:{fetch(request:Request):Promise<Response>} }
-const profiles=new Map<string,{title:string|null;expires:number}>();
+const profiles=new Map<string,{title:string|null;name:string|null;expires:number}>();
 let token: {value:string;expires:number;key:string} | undefined;
 let pendingToken: Promise<string> | undefined;
 async function accessToken(env:Env):Promise<string> {
@@ -37,18 +37,20 @@ export async function microsoftStatus(env:Env, displayId?:string) {
   try { new Intl.DateTimeFormat('en-US',{timeZone}); } catch { timeZone=findIana(timeZone)[0]; }
   if(!timeZone) throw new Error('Unsupported mailbox time zone');
   let jobTitle:string|null=null;
+  let displayName:string|null=null;
   if(delegated) {
     const profileKey=`${env.MICROSOFT_TENANT_ID}:${env.MICROSOFT_CLIENT_ID}:${displayId || env.TARGET_USER_ID || 'legacy'}`;
     const cached=profiles.get(profileKey);
-    if(cached && cached.expires>Date.now())jobTitle=cached.title;
+    if(cached && cached.expires>Date.now()){jobTitle=cached.title;displayName=cached.name;}
     else {
       try {
-        const profile=await get<{jobTitle?:string|null}>('?$select=jobTitle');
+        const profile=await get<{jobTitle?:string|null;displayName?:string|null}>('?$select=jobTitle,displayName');
         jobTitle=typeof profile.jobTitle==='string' ? profile.jobTitle.trim().slice(0,160) || null : null;
+        displayName=typeof profile.displayName==='string' ? profile.displayName.trim().slice(0,160) || null : null;
         if(profiles.size>=256)profiles.delete(profiles.keys().next().value!);
-        profiles.set(profileKey,{title:jobTitle,expires:Date.now()+300000});
+        profiles.set(profileKey,{title:jobTitle,name:displayName,expires:Date.now()+300000});
       } catch { /* A missing optional profile must not hide availability. */ }
     }
   }
-  return {...normalize(presence,calendar.value,timeZone,now),jobTitle};
+  return {...normalize(presence,calendar.value,timeZone,now),jobTitle,displayName};
 }

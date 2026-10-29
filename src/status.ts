@@ -1,6 +1,6 @@
 export const states = ['available', 'busy', 'in_meeting', 'away', 'do_not_disturb', 'offline'] as const;
 export type Status = typeof states[number];
-export interface StatusResponse { jobTitle?:string|null; status: Status; displayStatus: string; message: string; busyUntil: string | null; updatedAt: string; timeZone: string; demo: boolean }
+export interface StatusResponse { displayName?:string|null; jobTitle?:string|null; status: Status; displayStatus: string; message: string; busyUntil: string | null; updatedAt: string; timeZone: string; demo: boolean }
 export const labels: Record<Status, [string, string]> = {
   available: ['Available', 'Feel free to come in'], busy: ['Busy', 'Please do not disturb'],
   in_meeting: ['In a Meeting', 'Please come back later'], away: ['Away', 'Please check back soon'],
@@ -13,5 +13,6 @@ export function parseStatus(value: unknown): StatusResponse {
   const v = value as StatusResponse;
   if (!v || !states.includes(v.status) || typeof v.displayStatus !== 'string' || typeof v.message !== 'string' || typeof v.demo !== 'boolean' || !Number.isFinite(Date.parse(v.updatedAt)) || Date.parse(v.updatedAt) > Date.now()+60_000 || Date.now()-Date.parse(v.updatedAt)>120_000 || (v.busyUntil !== null && !Number.isFinite(Date.parse(v.busyUntil)))) throw new Error('Invalid status');
   if(v.jobTitle!=null && (typeof v.jobTitle!=='string' || v.jobTitle.length>160))throw new Error('Invalid title');
+  if(v.displayName!=null && (typeof v.displayName!=='string' || v.displayName.length>160))throw new Error('Invalid name');
   formatTime(v.updatedAt, v.timeZone); return v;
 }

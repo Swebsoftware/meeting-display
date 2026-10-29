@@ -10,14 +10,14 @@ it('isolates live status cache and token requests by personal display',async()=>
  const fetchMock=vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
   const url=String(input);const owner=(init!.headers as Record<string,string>).Authorization;
   if(url.endsWith('/presence'))return Response.json({availability:owner.endsWith(alice)?'Busy':'Available',activity:'Unknown'});
-  if(url.includes('$select=jobTitle'))return Response.json({jobTitle:owner.endsWith(alice)?'Accountant':'Office Manager'});
+  if(url.includes('$select=jobTitle'))return Response.json({jobTitle:owner.endsWith(alice)?'Accountant':'Office Manager',displayName:owner.endsWith(alice)?'Alice Example':'Bob Example'});
   if(url.includes('calendarView'))return Response.json({value:[]});
   return Response.json({timeZone:'America/New_York'});
  });vi.stubGlobal('fetch',fetchMock);
  try{
   const responses=await Promise.all([alice,bob].map(id=>worker.fetch(new Request(`https://office.test/api/status?display=${id}`),env)));
-  expect(await responses[0].json()).toMatchObject({status:'busy',jobTitle:'Accountant'});expect(await responses[1].json()).toMatchObject({status:'available',jobTitle:'Office Manager'});
-  expect(await (await worker.fetch(new Request(`https://office.test/api/status?display=${alice}`),env)).json()).toMatchObject({status:'busy',jobTitle:'Accountant'});expect(fetchMock).toHaveBeenCalledTimes(8);
+  expect(await responses[0].json()).toMatchObject({status:'busy',jobTitle:'Accountant',displayName:'Alice Example'});expect(await responses[1].json()).toMatchObject({status:'available',jobTitle:'Office Manager',displayName:'Bob Example'});
+  expect(await (await worker.fetch(new Request(`https://office.test/api/status?display=${alice}`),env)).json()).toMatchObject({status:'busy',jobTitle:'Accountant',displayName:'Alice Example'});expect(fetchMock).toHaveBeenCalledTimes(8);
   expect((await worker.fetch(new Request('https://office.test/api/status?display=someone@example.com'),env)).status).toBe(404);
   const missing=await worker.fetch(new Request(`https://office.test/api/status?display=${'E'.repeat(43)}`),env);expect(missing.status).toBe(503);expect(await missing.json()).toMatchObject({reconnectRequired:true});
  }finally{vi.unstubAllGlobals();}
