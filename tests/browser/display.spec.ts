@@ -49,3 +49,12 @@ for(const viewport of [{width:960,height:540},{width:1024,height:600},{width:800
  expect(await page.evaluate(()=>document.documentElement.scrollHeight<=innerHeight && document.documentElement.scrollWidth<=innerWidth)).toBe(true);
  if(viewport.width===1024)await page.screenshot({path:'/tmp/office-tablet-fixed.png'});
 });
+test('shows Microsoft job title and handles missing titles on tablets',async({page})=>{
+ await page.setViewportSize({width:1024,height:600});
+ for(const title of ['Senior Accounting and Operations Manager',null]){
+  await page.route('**/api/status*',route=>route.fulfill({json:{status:'available',displayStatus:'Available',message:'Feel free to come in',busyUntil:null,updatedAt:new Date().toISOString(),timeZone:'America/New_York',demo:false,jobTitle:title}}));
+  await page.goto('/');await expect(page.locator('.office-title')).toHaveText(title || 'OFFICE');
+  const office=await page.locator('.office').boundingBox();const date=await page.locator('.date').boundingBox();expect(office!.x+office!.width).toBeLessThan(date!.x);
+  expect(await page.evaluate(()=>document.documentElement.scrollHeight<=innerHeight)).toBe(true);
+ }
+});
