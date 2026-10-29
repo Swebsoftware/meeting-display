@@ -42,5 +42,5 @@ if(location.pathname.startsWith('/display/')) {
   const id=location.pathname.slice('/display/'.length);
   document.querySelector('link[rel="manifest"]')?.setAttribute('href',`/api/manifest?display=${encodeURIComponent(id)}`);
 }
-createRoot(document.getElementById('root')!).render(<React.StrictMode>{location.pathname==='/connect'?<Connect/>:<App/>}</React.StrictMode>);
+createRoot(document.getElementById('root')!).render(<React.StrictMode>{(location.pathname.startsWith('/display/') || location.pathname==='/demo')?<App/>:<Connect/>}</React.StrictMode>);
 if('serviceWorker' in navigator && import.meta.env.PROD) window.addEventListener('load',()=>{void navigator.serviceWorker.register('/sw.js').catch(()=>{});});

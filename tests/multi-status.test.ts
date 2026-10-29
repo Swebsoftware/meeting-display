@@ -27,3 +27,9 @@ it('personal PWA installation starts on the same user display',async()=>{
  const id='H'.repeat(43);const response=await worker.fetch(new Request(`https://office.test/api/manifest?display=${id}`),{ASSETS:{fetch:async()=>new Response('')}});
  expect(response.headers.get('content-type')).toBe('application/manifest+json');expect(await response.json()).toMatchObject({id:`/display/${id}`,start_url:`/display/${id}`});
 });
+
+it('never falls back to the legacy account for status without a personal link',async()=>{
+ const get=vi.fn(async()=> 'legacy-display-id');
+ const response=await worker.fetch(new Request('https://office.test/api/status'),{DEMO_MODE:'false',CONNECTIONS:{get,put:async()=>{}},ASSETS:{fetch:async()=>new Response('')}});
+ expect(response.status).toBe(404);expect(get).not.toHaveBeenCalled();expect(await response.json()).toEqual({error:'Display not found'});
+});

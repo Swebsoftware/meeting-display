@@ -1,4 +1,4 @@
-import { authRoute, ReconnectRequired, legacyDisplayId, validDisplayId } from './auth';
+import { authRoute, ReconnectRequired, validDisplayId } from './auth';
 import { microsoftStatus, type Env } from './graph';
 import { labels, states, type StatusResponse } from '../src/status';
 const cache=new Map<string,{data:StatusResponse;expires:number}>();
@@ -23,8 +23,8 @@ export default { async fetch(request:Request,env:Env):Promise<Response> {
       return Response.json({status,displayStatus:labels[status][0],message:labels[status][1],busyUntil:status==='in_meeting'?new Date(Date.now()+25*60_000).toISOString():null,updatedAt:new Date().toISOString(),timeZone:env.DISPLAY_TIME_ZONE || 'America/New_York',demo:true},{headers});
     }
     const requestedDisplay=url.searchParams.get('display');
-    if(requestedDisplay!==null && !validDisplayId(requestedDisplay)) return Response.json({error:'Display not found'},{status:404,headers});
-    const displayId=requestedDisplay ?? await legacyDisplayId(env);
+    if(!requestedDisplay || !validDisplayId(requestedDisplay)) return Response.json({error:'Display not found'},{status:404,headers});
+    const displayId=requestedDisplay;
     const cacheKey=`${env.MICROSOFT_TENANT_ID}:${env.MICROSOFT_CLIENT_ID}:${displayId || 'legacy'}`;
     let cached=cache.get(cacheKey);
     if(!cached || cached.expires<=Date.now()) {
