@@ -38,3 +38,14 @@ test('each signed-in user gets a separate personal link and display request',asy
   await page.getByRole('link',{name:'Open my display'}).click();await expect(page.getByRole('heading',{name:label,exact:true})).toBeVisible();expect(requestedDisplay).toBe(id);await context.close();
  }
 });
+for(const viewport of [{width:960,height:540},{width:1024,height:600},{width:800,height:1280}])test(`legacy tablet keeps round indicators at ${viewport.width}x${viewport.height}`,async({page})=>{
+ await page.setViewportSize(viewport);
+ await page.route('**/api/status*',route=>route.fulfill({json:{status:'available',displayStatus:'Available',message:'Feel free to come in',busyUntil:null,updatedAt:new Date().toISOString(),timeZone:'America/New_York',demo:false}}));
+ await page.goto('/');await expect(page.getByRole('heading',{name:'Available',exact:true})).toBeVisible();
+ // Simulate missing aspect-ratio and small viewport unit support on older Android browsers.
+ await page.addStyleTag({content:'.halo{aspect-ratio:auto!important}.sign{height:100vh!important;min-height:100vh!important}'});
+ for(const selector of ['.halo','.disc','.disc svg']){const bounds=await page.locator(selector).boundingBox();expect(bounds).not.toBeNull();expect(Math.abs(bounds!.width-bounds!.height)).toBeLessThan(2);}
+ const sign=await page.locator('.sign').boundingBox();expect(sign!.height).toBe(viewport.height);
+ expect(await page.evaluate(()=>document.documentElement.scrollHeight<=innerHeight && document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ if(viewport.width===1024)await page.screenshot({path:'/tmp/office-tablet-fixed.png'});
+});
